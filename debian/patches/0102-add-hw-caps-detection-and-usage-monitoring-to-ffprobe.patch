@@ -881,7 +881,7 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 ===================================================================
 --- /dev/null
 +++ FFmpeg/fftools/ffprobe_hw.c
-@@ -0,0 +1,569 @@
+@@ -0,0 +1,583 @@
 +/*
 + * Copyright (C) 2026 NyanMisaka
 + *
@@ -907,6 +907,16 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +#include <string.h>
 +
 +#include "ffprobe_hw_internal.h"
++
++/* Every device section goes through here, so a backend that found nothing is visible. */
++static int nb_hw_device_sections;
++
++static void print_hw_device_header(AVTextFormatContext *tfc)
++{
++    nb_hw_device_sections++;
++    mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
++    avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++}
 +
 +av_unused static void get_hwaccel_device_index(int *device_idx, const char *hwaccel_device)
 +{
@@ -948,10 +958,8 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +        (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_UTIL))
 +        nvml_ret = init_nvml_driver_version();
 +
-+    mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
-+
 +    for (i = 0; i < FFPROBE_HW_MAX_DEV_NUM && refs[i].cuda_ref; i++) {
-+        avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++        print_hw_device_header(tfc);
 +
 +        /* CUDA based device index */
 +        print_int("device_index_cuda", refs[i].device_index_cuda);
@@ -1043,10 +1051,8 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +    if (!i)
 +        return 0;
 +
-+    mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
-+
 +    for (i = 0; i < FFPROBE_HW_MAX_DEV_NUM && refs[i].d3d11va_ref; i++) {
-+        avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++        print_hw_device_header(tfc);
 +
 +        /* DXGI/D3D11VA based device index */
 +        print_int("device_index_d3d11va", refs[i].device_index_dxgi);
@@ -1141,8 +1147,7 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +        if (!refs[i].qsv_ref && !(hwaccel_flags & FFPROBE_HW_FLAG_PRINT_SUB_DEV))
 +            continue;
 +
-+        mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
-+        avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++        print_hw_device_header(tfc);
 +
 +        /* DRM based device path */
 +        print_str("device_path_drm", refs[i].device_path_drm);
@@ -1150,11 +1155,9 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +        /* DRM device info */
 +        if (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_DEV)
 +            print_drm_device_info(tfc, refs[i].drm_ref);
-+#   if 0
 +        /* DRM device util */
 +        if (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_UTIL)
 +            print_drm_device_util(tfc, refs[i].drm_ref);
-+#   endif
 +        /* VAAPI device info */
 +        if ((hwaccel_flags & FFPROBE_HW_FLAG_PRINT_DEV) &&
 +            (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_SUB_DEV))
@@ -1340,8 +1343,7 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +    if (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_OPT_VK)
 +        create_derive_vulkan_devices_from_rkmpp(refs);
 +
-+    mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
-+    avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++    print_hw_device_header(tfc);
 +    print_str("device_tree_rkmpp", refs[0].device_tree_rkmpp);
 +
 +    /* RKMPP decoder info */
@@ -1379,8 +1381,7 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +        return AVERROR(EINVAL);
 +
 +#if CONFIG_VIDEOTOOLBOX
-+    mark_section_show_entries(SECTION_ID_HWACCEL_DEVICE, 1, NULL);
-+    avtext_print_section_header(tfc, NULL, SECTION_ID_HWACCEL_DEVICE);
++    print_hw_device_header(tfc);
 +
 +    if (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_DEV)
 +        print_metal_device_info(tfc);
@@ -1406,6 +1407,8 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +    if (!tfc)
 +        return;
 +
++    nb_hw_device_sections = 0;
++
 +    switch (hwaccel_type) {
 +    case AV_HWDEVICE_TYPE_VAAPI:
 +        show_vaapi_info(tfc, refs, hwaccel_flags, hwaccel_device);
@@ -1430,6 +1433,17 @@ Index: FFmpeg/fftools/ffprobe_hw.c
 +        break;
 +    default:
 +        return;
++    }
++
++    /* An empty list says nothing about why: name the backend instead of leaving it blank. */
++    if (hwaccel_type != AV_HWDEVICE_TYPE_VIDEOTOOLBOX &&
++        (hwaccel_flags & FFPROBE_HW_FLAG_PRINT_DEV) && !nb_hw_device_sections) {
++        const char *name = av_hwdevice_get_type_name(hwaccel_type);
++
++        print_hw_device_header(tfc);
++        print_str("device_error", "No device found, or the driver/runtime failed to initialise");
++        print_str("device_error_type", name ? name : "unknown");
++        avtext_print_section_footer(tfc); // SECTION_ID_HWACCEL_DEVICE
 +    }
 +
 +    for (unsigned i = 0; i < FF_ARRAY_ELEMS(refs); i++) {
@@ -4811,7 +4825,7 @@ Index: FFmpeg/fftools/ffprobe_hw_internal.h
 ===================================================================
 --- /dev/null
 +++ FFmpeg/fftools/ffprobe_hw_internal.h
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,186 @@
 +/*
 + * Copyright (C) 2026 NyanMisaka
 + *
@@ -4923,6 +4937,7 @@ Index: FFmpeg/fftools/ffprobe_hw_internal.h
 +void create_derive_vaapi_devices_from_drm(HwDeviceRefs *refs);
 +void create_derive_vulkan_devices_from_drm(HwDeviceRefs *refs);
 +int print_drm_device_info(AVTextFormatContext *tfc, AVBufferRef *drm_ref);
++int print_drm_device_util(AVTextFormatContext *tfc, AVBufferRef *drm_ref);
 +
 +/* VAAPI */
 +void create_derive_qsv_devices_from_vaapi(HwDeviceRefs *refs);
@@ -8227,7 +8242,7 @@ Index: FFmpeg/fftools/ffprobe_hw_vaapi.c
 ===================================================================
 --- /dev/null
 +++ FFmpeg/fftools/ffprobe_hw_vaapi.c
-@@ -0,0 +1,1323 @@
+@@ -0,0 +1,1776 @@
 +/*
 + * Copyright (C) 2026 NyanMisaka
 + *
@@ -8542,6 +8557,425 @@ Index: FFmpeg/fftools/ffprobe_hw_vaapi.c
 +#endif
 +}
 +
++
++#if CONFIG_LIBDRM
++#   include <dirent.h>
++#   include <errno.h>
++#   include <inttypes.h>
++#   include <stdio.h>
++#   include <string.h>
++#   include <unistd.h>
++
++#   include "libavutil/time.h"
++
++#   define DRM_UTIL_MAX_ENGINES 16
++#   define DRM_UTIL_SAMPLE_US   (250 * 1000)
++
++typedef struct DrmUtilEngine {
++    char name[32];
++    int  capacity;
++    /* xe counts GPU cycles against drm-total-cycles-<name>, not ns against wall time. */
++    int  is_cycles;
++} DrmUtilEngine;
++
++typedef struct DrmUtilClient {
++    uint64_t client_id;
++    uint64_t busy[DRM_UTIL_MAX_ENGINES];
++    uint64_t total[DRM_UTIL_MAX_ENGINES];
++    uint64_t memory_dedicated;
++    uint64_t memory_shared;
++} DrmUtilClient;
++
++typedef struct DrmUtilSample {
++    DrmUtilEngine engines[DRM_UTIL_MAX_ENGINES];
++    int           nb_engines;
++    DrmUtilClient *clients;
++    int           nb_clients;
++    int           cap_clients;
++    /* Processes of other users need root to look into; say so rather than undercount. */
++    int           nb_unreadable;
++    int64_t       time_us;
++} DrmUtilSample;
++
++static int drm_util_engine_index(DrmUtilEngine *engines, int *nb_engines, const char *name)
++{
++    int i;
++
++    for (i = 0; i < *nb_engines; i++) {
++        if (!strcmp(engines[i].name, name))
++            return i;
++    }
++    if (*nb_engines >= DRM_UTIL_MAX_ENGINES)
++        return -1;
++
++    memset(&engines[i], 0, sizeof(engines[i]));
++    av_strlcpy(engines[i].name, name, sizeof(engines[i].name));
++    engines[i].capacity = 1;
++    return (*nb_engines)++;
++}
++
++static DrmUtilClient *drm_util_client(DrmUtilSample *s, uint64_t client_id)
++{
++    DrmUtilClient *c = NULL;
++    int i;
++
++    for (i = 0; i < s->nb_clients; i++) {
++        if (s->clients[i].client_id == client_id)
++            return &s->clients[i];
++    }
++
++    if (s->nb_clients >= s->cap_clients) {
++        int cap = s->cap_clients ? s->cap_clients * 2 : 64;
++
++        c = av_realloc_array(s->clients, cap, sizeof(*c));
++        if (!c)
++            return NULL;
++        s->clients = c;
++        s->cap_clients = cap;
++    }
++
++    c = &s->clients[s->nb_clients];
++    memset(c, 0, sizeof(*c));
++    c->client_id = client_id;
++    s->nb_clients++;
++    return c;
++}
++
++/* "<n>", "<n> KiB" or "<n> MiB", as drm_print_memory_stats() writes them. */
++static uint64_t drm_util_parse_size(const char *value)
++{
++    char unit[8] = { 0 };
++    uint64_t size = 0;
++
++    if (sscanf(value, "%"SCNu64" %7s", &size, unit) < 1)
++        return 0;
++    if (!strcmp(unit, "KiB"))
++        size <<= 10;
++    else if (!strcmp(unit, "MiB"))
++        size <<= 20;
++    else if (!strcmp(unit, "GiB"))
++        size <<= 30;
++
++    return size;
++}
++
++/* amdgpu "vram", xe "vram0", i915 "local0" are device memory; the rest is system RAM. */
++static int drm_util_region_is_dedicated(const char *region)
++{
++    return !strncmp(region, "vram", 4) || !strncmp(region, "local", 5);
++}
++
++/*
++ * One fdinfo file, see Documentation/gpu/drm-usage-stats.rst:
++ *   drm-engine-<name>: <ns> ns            i915, amdgpu
++ *   drm-engine-capacity-<name>: <n>
++ *   drm-cycles-<name>, drm-total-cycles-<name>     xe
++ *   drm-resident-<region>: <n> [KiB|MiB]  (drm-memory-<region> on older kernels)
++ */
++static void drm_util_read_fdinfo(const char *path, const char *driver, const char *pdev,
++                                 DrmUtilSample *s)
++{
++    char line[256], file_driver[64] = { 0 }, file_pdev[32] = { 0 };
++    uint64_t client_id = 0;
++    uint64_t resident[2] = { 0 }, legacy[2] = { 0 };
++    uint64_t busy[DRM_UTIL_MAX_ENGINES] = { 0 }, total[DRM_UTIL_MAX_ENGINES] = { 0 };
++    DrmUtilEngine engines[DRM_UTIL_MAX_ENGINES];
++    int nb_engines = 0, has_resident = 0;
++    DrmUtilClient *c = NULL;
++    FILE *f = NULL;
++
++    f = fopen(path, "r");
++    if (!f)
++        return;
++
++    while (fgets(line, sizeof(line), f)) {
++        char key[64], value[160];
++        int i;
++
++        if (sscanf(line, "%63[^:]: %159[^\n]", key, value) != 2)
++            continue;
++
++        if (!strcmp(key, "drm-driver")) {
++            av_strlcpy(file_driver, value, sizeof(file_driver));
++        } else if (!strcmp(key, "drm-pdev")) {
++            av_strlcpy(file_pdev, value, sizeof(file_pdev));
++        } else if (!strcmp(key, "drm-client-id")) {
++            client_id = strtoull(value, NULL, 10);
++        } else if (!strncmp(key, "drm-engine-capacity-", 20)) {
++            if ((i = drm_util_engine_index(engines, &nb_engines, key + 20)) >= 0)
++                engines[i].capacity = FFMAX(1, atoi(value));
++        } else if (!strncmp(key, "drm-engine-", 11)) {
++            if ((i = drm_util_engine_index(engines, &nb_engines, key + 11)) >= 0)
++                busy[i] = strtoull(value, NULL, 10);
++        } else if (!strncmp(key, "drm-cycles-", 11)) {
++            if ((i = drm_util_engine_index(engines, &nb_engines, key + 11)) >= 0) {
++                busy[i] = strtoull(value, NULL, 10);
++                engines[i].is_cycles = 1;
++            }
++        } else if (!strncmp(key, "drm-total-cycles-", 17)) {
++            if ((i = drm_util_engine_index(engines, &nb_engines, key + 17)) >= 0) {
++                total[i] = strtoull(value, NULL, 10);
++                engines[i].is_cycles = 1;
++            }
++        } else if (!strncmp(key, "drm-resident-", 13)) {
++            resident[drm_util_region_is_dedicated(key + 13)] += drm_util_parse_size(value);
++            has_resident = 1;
++        } else if (!strncmp(key, "drm-memory-", 11)) {
++            legacy[drm_util_region_is_dedicated(key + 11)] += drm_util_parse_size(value);
++        }
++    }
++    fclose(f);
++
++    if (!file_driver[0] || !file_pdev[0] || !client_id)
++        return;
++    if (strcmp(file_driver, driver) || strcmp(file_pdev, pdev))
++        return;
++
++    /* Every fd of a client repeats that client's counters: keep one copy, not the sum. */
++    c = drm_util_client(s, client_id);
++    if (!c)
++        return;
++
++    for (int i = 0; i < nb_engines; i++) {
++        int dst = drm_util_engine_index(s->engines, &s->nb_engines, engines[i].name);
++
++        if (dst < 0)
++            continue;
++        s->engines[dst].capacity   = FFMAX(s->engines[dst].capacity, engines[i].capacity);
++        s->engines[dst].is_cycles |= engines[i].is_cycles;
++        c->busy[dst]  = FFMAX(c->busy[dst],  busy[i]);
++        c->total[dst] = FFMAX(c->total[dst], total[i]);
++    }
++    /* drm-memory-<region> is the old spelling of the same figure, so never add both. */
++    c->memory_dedicated = FFMAX(c->memory_dedicated, has_resident ? resident[1] : legacy[1]);
++    c->memory_shared    = FFMAX(c->memory_shared,    has_resident ? resident[0] : legacy[0]);
++}
++
++static int drm_util_sample(const char *driver, const char *pdev, DrmUtilSample *s)
++{
++    DIR *proc = NULL;
++    struct dirent *ent = NULL;
++    long self = getpid();
++
++    memset(s, 0, sizeof(*s));
++    s->time_us = av_gettime_relative();
++
++    proc = opendir("/proc");
++    if (!proc)
++        return AVERROR(errno);
++
++    while ((ent = readdir(proc))) {
++        char fdinfo_dir[512];
++        DIR *fdinfo = NULL;
++        struct dirent *fd_ent = NULL;
++
++        if (ent->d_name[0] < '0' || ent->d_name[0] > '9')
++            continue;
++        /* This probe holds the device open itself and is not load worth reporting. */
++        if (strtol(ent->d_name, NULL, 10) == self)
++            continue;
++
++        snprintf(fdinfo_dir, sizeof(fdinfo_dir), "/proc/%s/fdinfo", ent->d_name);
++        fdinfo = opendir(fdinfo_dir);
++        if (!fdinfo) {
++            if (errno == EACCES)
++                s->nb_unreadable++;
++            continue;
++        }
++
++        while ((fd_ent = readdir(fdinfo))) {
++            char path[1024];
++
++            if (fd_ent->d_name[0] < '0' || fd_ent->d_name[0] > '9')
++                continue;
++            snprintf(path, sizeof(path), "%s/%s", fdinfo_dir, fd_ent->d_name);
++            drm_util_read_fdinfo(path, driver, pdev, s);
++        }
++        closedir(fdinfo);
++    }
++    closedir(proc);
++
++    return 0;
++}
++
++static void drm_util_sample_free(DrmUtilSample *s)
++{
++    av_freep(&s->clients);
++    s->nb_clients = 0;
++    s->cap_clients = 0;
++}
++
++/* Device-wide counters some drivers (amdgpu) keep in the PCI device's sysfs directory. */
++static int drm_util_read_sysfs(const char *pdev, const char *attr, uint64_t *value)
++{
++    char path[256];
++    FILE *f = NULL;
++    int ret = 0;
++
++    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/%s", pdev, attr);
++    f = fopen(path, "r");
++    if (!f)
++        return AVERROR(errno);
++    if (fscanf(f, "%"SCNu64, value) != 1)
++        ret = AVERROR(EIO);
++    fclose(f);
++
++    return ret;
++}
++
++int print_drm_device_util(AVTextFormatContext *tfc, AVBufferRef *drm_ref)
++{
++    AVHWDeviceContext *dev_ctx = NULL;
++    AVDRMDeviceContext *hwctx = NULL;
++    drmVersion *drm_ver = NULL;
++    drmDevice *drm_dev = NULL;
++    DrmUtilSample before = { 0 }, after = { 0 };
++    uint64_t memory_dedicated = 0, memory_shared = 0;
++    uint64_t busy[DRM_UTIL_MAX_ENGINES] = { 0 }, total[DRM_UTIL_MAX_ENGINES] = { 0 };
++    uint64_t sysfs_value = 0;
++    int64_t elapsed_us = 0;
++    int gpu_util = 0, has_gpu_util = 0;
++    char pdev[32] = { 0 };
++    int ret = 0, i, j;
++
++    if (!tfc || !drm_ref)
++        return AVERROR(EINVAL);
++
++    dev_ctx = (AVHWDeviceContext*)drm_ref->data;
++    if (!dev_ctx)
++        return AVERROR(ENOSYS);
++
++    hwctx = dev_ctx->hwctx;
++    if (hwctx->fd < 0)
++        return AVERROR(ENOSYS);
++
++    drm_ver = drmGetVersion(hwctx->fd);
++    if (!drm_ver)
++        return AVERROR(ENOSYS);
++
++#   ifdef DRM_DEVICE_GET_PCI_REVISION
++    ret = drmGetDevice2(hwctx->fd, 0, &drm_dev);
++#   else
++    ret = drmGetDevice(hwctx->fd, &drm_dev);
++#   endif
++    if (ret || !drm_dev || drm_dev->bustype != DRM_BUS_PCI) {
++        ret = AVERROR(ENOSYS);
++        goto exit;
++    }
++
++    /* fdinfo names the device the same way: domain:bus:dev.func */
++    snprintf(pdev, sizeof(pdev), "%04x:%02x:%02x.%x",
++             drm_dev->businfo.pci->domain, drm_dev->businfo.pci->bus,
++             drm_dev->businfo.pci->dev, drm_dev->businfo.pci->func);
++
++    if ((ret = drm_util_sample(drm_ver->name, pdev, &before)) < 0)
++        goto exit;
++
++    /* The counters are cumulative, so utilisation is their change over a short window. */
++    av_usleep(DRM_UTIL_SAMPLE_US);
++
++    if ((ret = drm_util_sample(drm_ver->name, pdev, &after)) < 0)
++        goto exit;
++
++    elapsed_us = FFMAX(1, after.time_us - before.time_us);
++
++    /* Clients run in turn on an engine, so their busy time adds up to the engine's. */
++    for (i = 0; i < after.nb_clients; i++) {
++        const DrmUtilClient *c = &after.clients[i];
++        const DrmUtilClient *b = NULL;
++
++        memory_dedicated += c->memory_dedicated;
++        memory_shared    += c->memory_shared;
++
++        for (j = 0; j < before.nb_clients; j++) {
++            if (before.clients[j].client_id == c->client_id) {
++                b = &before.clients[j];
++                break;
++            }
++        }
++        if (!b)
++            continue;
++
++        for (j = 0; j < after.nb_engines; j++) {
++            int src = drm_util_engine_index(before.engines, &before.nb_engines,
++                                            after.engines[j].name);
++
++            if (src < 0)
++                continue;
++            if (c->busy[j] > b->busy[src])
++                busy[j] += c->busy[j] - b->busy[src];
++            /* The total is the engine's own clock, the same in every client. */
++            if (c->total[j] > b->total[src])
++                total[j] = FFMAX(total[j], c->total[j] - b->total[src]);
++        }
++    }
++
++    mark_section_show_entries(SECTION_ID_DEVICE_UTIL_DRM, 1, NULL);
++    avtext_print_section_header(tfc, NULL, SECTION_ID_DEVICE_UTIL_DRM);
++
++    print_str("device_driver_name", drm_ver->name);
++    print_str("device_pci_address", pdev);
++    /* Only the processes this one can see: a container sees its own, a user sees theirs. */
++    print_int("device_client_count", after.nb_clients);
++    if (after.nb_unreadable)
++        print_int("device_processes_unreadable", after.nb_unreadable);
++    print_int("device_sample_duration_ms", (elapsed_us + 500) / 1000);
++
++    if (drm_util_read_sysfs(pdev, "mem_info_vram_total", &sysfs_value) >= 0)
++        print_int("device_memory_total", sysfs_value);
++    if (drm_util_read_sysfs(pdev, "mem_info_vram_used", &sysfs_value) >= 0)
++        print_int("device_memory_used", sysfs_value);
++    print_int("device_memory_dedicated_usage", memory_dedicated);
++    print_int("device_memory_shared_usage", memory_shared);
++
++    for (i = 0; i < after.nb_engines; i++) {
++        const DrmUtilEngine *e = &after.engines[i];
++        char key[64], *p = NULL;
++        uint64_t window = 0;
++        int percent = 0;
++
++        window  = e->is_cycles ? total[i] : (uint64_t)elapsed_us * 1000;
++        window *= e->capacity;
++        if (window)
++            percent = (int)FFMIN(100, (busy[i] * 100 + window / 2) / window);
++
++        snprintf(key, sizeof(key), "device_util_%s", e->name);
++        for (p = key; *p; p++) {
++            if (*p == '-')
++                *p = '_';
++        }
++        print_int(key, percent);
++        gpu_util = FFMAX(gpu_util, percent);
++        has_gpu_util = 1;
++    }
++
++    /* The driver's own device-wide figures count clients fdinfo cannot show us. */
++    if (drm_util_read_sysfs(pdev, "gpu_busy_percent", &sysfs_value) >= 0) {
++        gpu_util = FFMAX(gpu_util, (int)FFMIN(100, sysfs_value));
++        has_gpu_util = 1;
++    }
++    if (drm_util_read_sysfs(pdev, "vcn_busy_percent", &sysfs_value) >= 0) {
++        print_int("device_video_utilization", (int)FFMIN(100, sysfs_value));
++        gpu_util = FFMAX(gpu_util, (int)FFMIN(100, sysfs_value));
++    }
++    if (has_gpu_util)
++        print_int("device_gpu_utilization", gpu_util);
++
++    avtext_print_section_footer(tfc); // SECTION_ID_DEVICE_UTIL_DRM
++    ret = 0;
++
++exit:
++    drm_util_sample_free(&before);
++    drm_util_sample_free(&after);
++    if (drm_dev)
++        drmFreeDevice(&drm_dev);
++    if (drm_ver)
++        drmFreeVersion(drm_ver);
++
++    return ret;
++}
++#endif
++
 +int print_drm_device_info(AVTextFormatContext *tfc, AVBufferRef *drm_ref)
 +{
 +#if CONFIG_LIBDRM
@@ -8669,6 +9103,23 @@ Index: FFmpeg/fftools/ffprobe_hw_vaapi.c
 +    MAP("VAAPI VVC Decoder, Main10",                VVC,        VVC_MAIN_10,                37), /* VAProfileVVCMain10 */
 +    MAP(NULL, NONE, UNKNOWN, -1), /* VAProfileNone */
 +};
++
++/* The profiles FFmpeg's VAAPI encoders can drive at 10 bits or more. */
++static int vaapi_enc_profile_10bit(enum AVCodecID codec, int va_profile)
++{
++    switch (codec) {
++    case AV_CODEC_ID_H264:
++        return va_profile == 36;                              /* VAProfileH264High10 */
++    case AV_CODEC_ID_HEVC:
++        return va_profile == 18 || (va_profile >= 23 && va_profile <= 28);
++    case AV_CODEC_ID_AV1:
++        return va_profile == 32;                              /* VAProfileAV1Profile0 */
++    case AV_CODEC_ID_VP9:
++        return va_profile == 21 || va_profile == 22;          /* VP9Profile2/3 */
++    default:
++        return 0;
++    }
++}
 +
 +static const VaapiCodecMode vaapienc_modes[] = {
 +    MAP("VAAPI H.264 Encoder, ConstrainedBaseline", H264,       H264_CONSTRAINED_BASELINE,  13), /* VAProfileH264ConstrainedBaseline */
@@ -9011,7 +9462,24 @@ Index: FFmpeg/fftools/ffprobe_hw_vaapi.c
 +            }
 +
 +            if (print_encoder && mode->codec != AV_CODEC_ID_MJPEG) {
++                int has_p010 = 0;
++
++                for (k = 0; k < nb_surf_attrs; k++) {
++                    if (surf_attrs[k].type == VASurfaceAttribPixelFormat &&
++                        surf_attrs[k].value.value.i == 0x30313050 /* VA_FOURCC_P010 */) {
++                        has_p010 = 1;
++                        break;
++                    }
++                }
++                /*
++                 * Mesa lists P010 on configs whose profile cannot carry it (H.264 High,
++                 * for one), so a format alone is not an answer: the profile must be a
++                 * 10-bit one too.
++                 */
++                const int supports_10bit = has_p010 && vaapi_enc_profile_10bit(mode->codec, mode->va_profile);
 +                print_int("low_power", is_enc_vid_entry_lp);
++                /* Same field name as CUDA, so a client can gate 10-bit in one way. */
++                print_int("support_10bit_encode", supports_10bit);
 +
 +                sts = vaGetConfigAttributes(hwctx->display, mode->va_profile,
 +                                            e, vid_enc_conf_attrs,
